@@ -63,7 +63,7 @@ class GetcNode:
 
 
 class BinaryOpNode:
-    """Represents binary operations like `a < b` or `a > b`."""
+    """Represents binary operations like `a < b`, `a - b`, etc."""
     def __init__(self, left, op: str, right):
         self.left = left
         self.op = op
@@ -141,10 +141,12 @@ def tokenize(code: str):
         ('LPAREN',   r'\('),
         ('RPAREN',   r'\)'),
         ('OP',       r'\+=|-=|\*=|//=|\/=|%=|='),
-        ('COMP',     r'<|>'),
+        ('COMP',     r'==|!=|<=|>=|<|>'),
+        ('MUL_OP',   r'\/\/|\*|\/|%'),
+        ('ADD_OP',   r'\+|-' ),
         ('STRING',   r'"(?:\\.|[^"\\])*"'),
         ('CHAR',     r"'(?:\\.|[^'\\])'"),
-        ('INT',      r'-?\d+'),
+        ('INT',      r'\d+'),
         ('IDENT',    r'[a-zA-Z_]\w*'),
         ('SEMI',     r'[;\n]+'),
         ('SKIP',     r'[ \t\r]+'),
@@ -261,9 +263,53 @@ class Parser:
             self.expect('RBRACK')
         return VarRef(var_name, index)
 
-    def parse_operand(self):
+    def parse_expression(self):
+        return self.parse_comparison()
+
+    def parse_comparison(self):
+        node = self.parse_additive()
+        while self.peek()[0] == 'COMP':
+            _, op = self.tokens[self.pos]
+            self.pos += 1
+            right = self.parse_additive()
+            node = BinaryOpNode(node, op, right)
+        return node
+
+    def parse_additive(self):
+        node = self.parse_multiplicative()
+        while self.peek()[0] == 'ADD_OP':
+            _, op = self.tokens[self.pos]
+            self.pos += 1
+            right = self.parse_multiplicative()
+            node = BinaryOpNode(node, op, right)
+        return node
+
+    def parse_multiplicative(self):
+        node = self.parse_unary()
+        while self.peek()[0] == 'MUL_OP':
+            _, op = self.tokens[self.pos]
+            self.pos += 1
+            right = self.parse_unary()
+            node = BinaryOpNode(node, op, right)
+        return node
+
+    def parse_unary(self):
+        if self.peek()[0] == 'ADD_OP' and self.peek()[1] == '-':
+            self.pos += 1
+            operand = self.parse_unary()
+            if isinstance(operand, IntNode):
+                return IntNode(-operand.val)
+            return BinaryOpNode(IntNode(0), '-', operand)
+        return self.parse_primary()
+
+    def parse_primary(self):
         k, val = self.peek()
-        if k == 'INT':
+        if k == 'LPAREN':
+            self.expect('LPAREN')
+            expr = self.parse_expression()
+            self.expect('RPAREN')
+            return expr
+        elif k == 'INT':
             self.expect('INT')
             return IntNode(val)
         elif k == 'CHAR':
@@ -277,17 +323,9 @@ class Parser:
         elif k == 'IDENT':
             return self.parse_var_ref()
         elif k == 'STRING':
-            raise SyntaxError("String literals cannot be assigned to variables or stored in arrays!")
+            raise SyntaxError("String literals cannot be used in arithmetic expressions!")
         else:
-            raise SyntaxError(f"Expected operand (INT, CHAR, GETC, or IDENT), got {k} ({val})")
-
-    def parse_expression(self):
-        left = self.parse_operand()
-        if self.peek()[0] == 'COMP':
-            _, op = self.expect('COMP')
-            right = self.parse_operand()
-            return BinaryOpNode(left, op, right)
-        return left
+            raise SyntaxError(f"Expected expression, got {k} ({val}) at token index {self.pos}")
 
     def parse_rhs(self):
         if self.match('LBRACK'):
@@ -305,6 +343,21 @@ class Parser:
 
 
 # --- TRANSPILER ---
+
+FISH_OPS = {
+    '+': '+',
+    '-': '-',
+    '*': '*',
+    '/': ',',
+    '//': ',',
+    '%': '%',
+    '<': '(',
+    '>': ')',
+    '==': '=',
+    '!=': '=0=',
+    '<=': ')0=',
+    '>=': '(0=',
+}
 
 class FishTranspiler:
     def __init__(self):
@@ -330,7 +383,7 @@ class FishTranspiler:
         elif isinstance(operand, BinaryOpNode):
             left_code = self._eval_operand(operand.left)
             right_code = self._eval_operand(operand.right)
-            fish_op = "(" if operand.op == '<' else ")"
+            fish_op = FISH_OPS[operand.op]
             return f"{left_code}{right_code}{fish_op}"
         else:
             raise ValueError(f"Unknown or invalid operand type: {type(operand)}")

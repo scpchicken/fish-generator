@@ -1,18 +1,13 @@
 i = 1
-d = 67
 
-while d {
-    c = i
-    c %= 3
+while i < 101 {
     g = 1
-    if c {
+    if i % 3 {
     } else {
         print("Fizz")
         g = 0
     }
-    c = i
-    c %= 5
-    if c {
+    if i % 5 {
     } else {
         print("Buzz")
         g = 0
@@ -24,6 +19,4 @@ while d {
         println("")
     }
     i += 1
-    d = i
-    d -= 101
 }

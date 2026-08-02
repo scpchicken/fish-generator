@@ -23,6 +23,36 @@
       color: #f59e0b;
       margin-bottom: 15px;
     }
+
+    /* Top Controls Bar */
+    .controls-bar {
+      display: flex;
+      gap: 15px;
+      align-items: center;
+      margin-bottom: 20px;
+      background-color: #1e293b;
+      padding: 12px 16px;
+      border: 1px solid #334155;
+      border-radius: 8px;
+    }
+    .controls-bar label {
+      font-weight: bold;
+      color: #cbd5e1;
+    }
+    select {
+      background-color: #0f172a;
+      color: #f8fafc;
+      border: 1px solid #334155;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    select:focus {
+      outline: 2px solid #3b82f6;
+    }
+
+    /* Main Grid Layout */
     .container {
       display: flex;
       gap: 20px;
@@ -56,25 +86,88 @@
       outline: 2px solid #3b82f6;
       border-color: transparent;
     }
+
+    /* Arguments Section */
+    .args-section {
+      margin-top: 20px;
+      background-color: #1e293b;
+      padding: 16px;
+      border: 1px solid #334155;
+      border-radius: 8px;
+    }
+    .args-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .args-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .arg-row {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .arg-input {
+      flex: 1;
+      height: 90px;
+      background-color: #0f172a;
+      color: #f8fafc;
+      border: 1px solid #334155;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-family: 'Fira Code', 'Consolas', monospace;
+      font-size: 14px;
+      line-height: 1.4;
+      resize: vertical;
+    }
+    .arg-input:focus {
+      outline: 2px solid #3b82f6;
+      border-color: transparent;
+    }
+
+    /* Buttons */
     button {
-      margin-top: 15px;
-      padding: 10px 20px;
-      font-size: 16px;
+      padding: 8px 16px;
+      font-size: 14px;
       font-weight: bold;
-      background-color: #2563eb;
-      color: white;
       border: none;
       border-radius: 6px;
       cursor: pointer;
       transition: background-color 0.2s ease;
     }
-    button:hover:not(:disabled) {
+    .btn-primary {
+      margin-top: 15px;
+      padding: 10px 20px;
+      font-size: 16px;
+      background-color: #2563eb;
+      color: white;
+    }
+    .btn-primary:hover:not(:disabled) {
       background-color: #1d4ed8;
     }
-    button:disabled {
+    .btn-primary:disabled {
       background-color: #334155;
       color: #64748b;
       cursor: not-allowed;
+    }
+    .btn-add {
+      background-color: #059669;
+      color: white;
+    }
+    .btn-add:hover {
+      background-color: #047857;
+    }
+    .btn-remove {
+      background-color: #dc2626;
+      color: white;
+      padding: 8px 12px;
+    }
+    .btn-remove:hover {
+      background-color: #b91c1c;
     }
   </style>
 </head>
@@ -83,25 +176,37 @@
   <h1>Fish Transpiler Online</h1>
   <div id="status">Loading Python runtime (Pyodide)...</div>
 
+  <!-- Examples Selection Bar -->
+  <div class="controls-bar">
+    <label for="exampleSelect">Select Example:</label>
+    <select id="exampleSelect" onchange="onExampleChange()">
+      <option value="test/tutorial/tutorial.c">test/tutorial/tutorial.c</option>
+    </select>
+  </div>
+
+  <!-- Main Code Container -->
   <div class="container">
     <div class="box">
-      <label for="inputCode">Source Code:</label>
-      <textarea id="inputCode" placeholder="Type your C-like code here...">
-i = 1
-j = 2
-if i < j {
-    println(i)
-}
-      </textarea>
+      <label for="inputCode">Source Code (.c):</label>
+      <textarea id="inputCode" placeholder="Type or select C-like code..."></textarea>
     </div>
 
     <div class="box">
       <label for="outputCode">Generated Fish (.z) Code:</label>
-      <textarea id="outputCode" readonly placeholder="Output will appear here..."></textarea>
+      <textarea id="outputCode" readonly placeholder="Transpiled code will appear here..."></textarea>
     </div>
   </div>
 
-  <button id="transpileBtn" disabled onclick="runTranspiler()">Transpile</button>
+  <!-- Program Arguments UI -->
+  <div class="args-section">
+    <div class="args-header">
+      <label>Input Arguments (.i file inputs):</label>
+      <button type="button" class="btn-add" onclick="addArgument('')">+ Add Argument</button>
+    </div>
+    <div id="argsContainer" class="args-list"></div>
+  </div>
+
+  <button id="transpileBtn" class="btn-primary" disabled onclick="runTranspiler()">Transpile</button>
 
   <script>
     let pyodide;
@@ -136,14 +241,140 @@ FishTranspiler = mod_globals['FishTranspiler']
         statusEl.innerText = "Pyodide Ready!";
         statusEl.style.color = "#22c55e";
         btnEl.disabled = false;
-        
-        runTranspiler();
+
+        // Load example list and set default example
+        await discoverExamples();
+        await loadExample("test/tutorial/tutorial.c");
+
       } catch (err) {
         statusEl.innerText = "Initialization Failed: " + err.message;
         statusEl.style.color = "#ef4444";
         console.error(err);
       }
     }
+
+    /* --- ARGUMENT MANAGEMENT --- */
+
+    function addArgument(value = '') {
+      const container = document.getElementById("argsContainer");
+      
+      const row = document.createElement("div");
+      row.className = "arg-row";
+
+      // Changed from <input> to <textarea> to allow literal multiline inputs
+      const textarea = document.createElement("textarea");
+      textarea.className = "arg-input";
+      textarea.value = value;
+      textarea.placeholder = "Enter argument / stdin input...";
+
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.className = "btn-remove";
+      removeBtn.innerText = "×";
+      removeBtn.onclick = () => row.remove();
+
+      row.appendChild(textarea);
+      row.appendChild(removeBtn);
+      container.appendChild(row);
+    }
+
+    function clearArguments() {
+      document.getElementById("argsContainer").innerHTML = "";
+    }
+
+    /* --- EXAMPLE & FILE LOADING --- */
+
+    async function discoverExamples() {
+      const select = document.getElementById("exampleSelect");
+      let exampleFiles = ["test/tutorial/tutorial.c"];
+
+      try {
+        const hostname = window.location.hostname;
+        const pathParts = window.location.pathname.split('/').filter(Boolean);
+
+        if (hostname.endsWith(".github.io") && pathParts.length > 0) {
+          const owner = hostname.split('.')[0];
+          const repo = pathParts[0];
+
+          async function fetchTree(dirPath) {
+            const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${dirPath}`;
+            const res = await fetch(apiUrl);
+            if (!res.ok) return [];
+            
+            const items = await res.json();
+            let files = [];
+            for (const item of items) {
+              if (item.type === "file" && item.name.endsWith(".c")) {
+                files.push(item.path);
+              } else if (item.type === "dir") {
+                const subFiles = await fetchTree(item.path);
+                files = files.concat(subFiles);
+              }
+            }
+            return files;
+          }
+
+          const githubFiles = await fetchTree("test");
+          if (githubFiles.length > 0) {
+            exampleFiles = githubFiles;
+          }
+        }
+      } catch (e) {
+        console.warn("Could not discover examples automatically via GitHub API:", e);
+      }
+
+      // Populate dropdown options
+      select.innerHTML = "";
+      exampleFiles.sort().forEach(filePath => {
+        const option = document.createElement("option");
+        option.value = filePath;
+        option.innerText = filePath;
+        select.appendChild(option);
+      });
+
+      // Ensure default selection is test/tutorial/tutorial.c
+      if (exampleFiles.includes("test/tutorial/tutorial.c")) {
+        select.value = "test/tutorial/tutorial.c";
+      }
+    }
+
+    async function loadExample(cFilePath) {
+      const inputEl = document.getElementById("inputCode");
+
+      try {
+        // 1. Fetch .c source code
+        const cRes = await fetch(cFilePath);
+        if (cRes.ok) {
+          inputEl.value = await cRes.text();
+          runTranspiler();
+        } else {
+          inputEl.value = `// Failed to load ${cFilePath}`;
+        }
+
+        // 2. Fetch corresponding .i input arguments file
+        clearArguments();
+        const iFilePath = cFilePath.replace(/\.c$/, '.i');
+        const iRes = await fetch(iFilePath);
+
+        if (iRes.ok) {
+          const iText = await iRes.text();
+          // Parse .i content split by double newlines (\n\n)
+          const rawArgs = iText.replace(/\r\n/g, "\n").split("\n\n");
+          const parsedArgs = rawArgs.map(arg => arg.trim()).filter(arg => arg !== "");
+          
+          parsedArgs.forEach(argVal => addArgument(argVal));
+        }
+      } catch (err) {
+        console.error("Error loading example:", err);
+      }
+    }
+
+    function onExampleChange() {
+      const selectedPath = document.getElementById("exampleSelect").value;
+      loadExample(selectedPath);
+    }
+
+    /* --- TRANSPILER EXECUTION --- */
 
     function runTranspiler() {
       if (!pyodide) return;
