@@ -1,26 +1,70 @@
 import sys
 import re
+import heapq
+
+# --- OPTIMIZED NUMBER GENERATOR ---
+
+_NUM_FISH_CACHE = {}
+
+def _init_num_fish():
+    """Precomputes the absolute shortest Fish instruction sequence for integers using BFS."""
+    global _NUM_FISH_CACHE
+    dist = {}
+    pq = []
+
+    def add(val, code):
+        if val not in dist or len(code) < len(dist[val]):
+            dist[val] = code
+            heapq.heappush(pq, (len(code), val, code))
+
+    # Single hex digits 0..15 (1 char)
+    for i in range(16):
+        add(i, "0123456789abcdef"[i])
+
+    # Printable ASCII characters (3 chars: 'c')
+    for c in range(32, 127):
+        ch = chr(c)
+        if ch != "'":
+            add(c, f"'{ch}'")
+
+    # BFS search up to depth 5
+    while pq:
+        l, v, code = heapq.heappop(pq)
+        if len(dist[v]) < l:
+            continue
+        if l >= 5:
+            continue
+
+        # Unary operations
+        add(-v, f"0{code}-")
+        add(v * 2, f"{code}:+")
+        add(v * v, f"{code}:*")
+
+        # Binary operations with small known values
+        for v2, code2 in list(dist.items()):
+            if len(code2) > 3:
+                continue
+            add(v + v2, f"{code}{code2}+")
+            add(v - v2, f"{code}{code2}-")
+            add(v * v2, f"{code}{code2}*")
+            if v2 != 0 and v % v2 == 0:
+                add(v // v2, f"{code}{code2},")
+
+    _NUM_FISH_CACHE = dist
+
+_init_num_fish()
+
 
 def num_to_fish(n: int) -> str:
-    """Generates fish instructions to push integer `n` onto the stack."""
+    """Returns the shortest Fish instruction sequence to push integer `n` onto the stack."""
+    if n in _NUM_FISH_CACHE:
+        return _NUM_FISH_CACHE[n]
     if n < 0:
         return num_to_fish(-n) + "0$-"
-    if n <= 15:
-        return "0123456789abcdef"[n]
     
-    digits = []
-    temp = n
-    while temp > 0:
-        digits.append(temp % 15)
-        temp //= 15
-    digits.reverse()
-    
-    code = num_to_fish(digits[0])
-    for d in digits[1:]:
-        code += "f*"
-        if d > 0:
-            code += f"{num_to_fish(d)}+"
-    return code
+    # Fallback for large numbers outside precomputed cache
+    q, r = divmod(n, 15)
+    return num_to_fish(q) + "f*" + (f"{num_to_fish(r)}+" if r else "")
 
 
 # --- AST NODES ---
@@ -29,7 +73,7 @@ class VarRef:
     """Represents variable access: simple `a` or indexed `a[expr]`."""
     def __init__(self, name: str, index=None):
         self.name = name
-        self.index = index  # None (defaults to x=0) or an expression node
+        self.index = index
 
 
 class IntNode:
@@ -72,7 +116,7 @@ class BinaryOpNode:
 
 class ArrayLiteralNode:
     def __init__(self, elements: list):
-        self.elements = elements  # List of operands/expressions
+        self.elements = elements
 
 
 class ASTNode:
@@ -92,8 +136,8 @@ class AssignNode(ASTNode):
 
 class PrintNode(ASTNode):
     def __init__(self, operand, mode='println'):
-        self.operand = operand  # Can be an operand/expression node or StringNode
-        self.mode = mode        # 'println', 'print', or 'putc'
+        self.operand = operand
+        self.mode = mode
 
     def line_count(self) -> int:
         return 1
@@ -140,7 +184,7 @@ def tokenize(code: str):
         ('COMMA',    r','),
         ('LPAREN',   r'\('),
         ('RPAREN',   r'\)'),
-        ('COMP',     r'==|!=|<=|>=|<|>'),  # Placed BEFORE 'OP' so '==' matches before '='
+        ('COMP',     r'==|!=|<=|>=|<|>'),
         ('OP',       r'\+=|-=|\*=|//=|\/=|%=|='),
         ('MUL_OP',   r'\/\/|\*|\/|%'),
         ('ADD_OP',   r'\+|-' ),
@@ -365,7 +409,7 @@ FISH_OPS = {
 class FishTranspiler:
     def __init__(self):
         self.var_map = {}
-        self.base_y = 100
+        self.base_y = 0
 
     def _get_var_y(self, var_name: str) -> str:
         """Returns the y-coordinate instruction string for `var_name`."""
@@ -375,31 +419,36 @@ class FishTranspiler:
         return num_to_fish(y_coord)
 
     def _build_string_push(self, text: str) -> str:
-        """Generates fish code to push characters of `text` onto stack in order (text[0] first, text[-1] last)."""
+        """Generates fish code to push characters of `text` using optimal quoting."""
         fish_str = ""
+        quote_char = "'" if ('"' in text and "'" not in text) else '"'
         in_quote = False
+
         for ch in text:
             code = ord(ch)
-            if 32 <= code <= 126 and ch != '"':
+            if 32 <= code <= 126 and ch != quote_char:
                 if not in_quote:
-                    fish_str += '"'
+                    fish_str += quote_char
                     in_quote = True
                 fish_str += ch
             else:
                 if in_quote:
-                    fish_str += '"'
+                    fish_str += quote_char
                     in_quote = False
                 
-                if code == 10:    # \n -> hex 'a'
+                if code == 10:
                     fish_str += "a"
-                elif code == 13:  # \r -> hex 'd'
+                elif code == 13:
                     fish_str += "d"
-                elif code == 9:   # \t -> '9'
+                elif code == 9:
                     fish_str += "9"
+                elif code == 0:
+                    fish_str += "0"
                 else:
                     fish_str += num_to_fish(code)
+
         if in_quote:
-            fish_str += '"'
+            fish_str += quote_char
         return fish_str
 
     def _eval_operand(self, operand) -> str:
@@ -435,7 +484,7 @@ class FishTranspiler:
         ast_nodes = parser.parse_program()
 
         total_lines = sum(node.line_count() for node in ast_nodes)
-        self.base_y = total_lines + 100
+        self.base_y = total_lines  # Variable storage starts directly after code grid
 
         fish_lines = []
         curr_line = 0
@@ -462,7 +511,6 @@ class FishTranspiler:
                 y_code = self._get_var_y(node.target.name)
                 text = node.rhs.text
                 line_code += self._build_string_push(text)
-                # Pop and store from right-to-left so top of stack matches the current index
                 for idx in range(len(text) - 1, -1, -1):
                     if node.target.index is None:
                         x_code = num_to_fish(idx)
