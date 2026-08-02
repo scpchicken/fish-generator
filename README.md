@@ -26,6 +26,11 @@ i += 5
 j = 3
 i += j
 
+# operators supported
+# + - * / // %
+# += -= *= /= //= %=
+# == != < > <= >=
+
 # print without newline
 print(i)
 # print with newline

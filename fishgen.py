@@ -33,7 +33,7 @@ class VarRef:
 
 
 class IntNode:
-    def __init__(self, val: str):
+    def __init__(self, val):
         self.val = int(val)
 
 
@@ -47,7 +47,7 @@ class CharNode:
 
 
 class StringNode:
-    """Represents a string literal used in print/println."""
+    """Represents a string literal used in print/println or string assignments."""
     def __init__(self, raw_val: str):
         content = raw_val[1:-1]
         escapes = {
@@ -323,7 +323,7 @@ class Parser:
         elif k == 'IDENT':
             return self.parse_var_ref()
         elif k == 'STRING':
-            raise SyntaxError("String literals cannot be used in arithmetic expressions!")
+            raise SyntaxError("String literals cannot be used directly in arithmetic expressions!")
         else:
             raise SyntaxError(f"Expected expression, got {k} ({val}) at token index {self.pos}")
 
@@ -338,6 +338,9 @@ class Parser:
                     break
             self.expect('RBRACK')
             return ArrayLiteralNode(elements)
+        elif self.peek()[0] == 'STRING':
+            _, token_val = self.expect('STRING')
+            return StringNode(token_val)
         else:
             return self.parse_expression()
 
@@ -370,6 +373,34 @@ class FishTranspiler:
             self.var_map[var_name] = len(self.var_map)
         y_coord = self.base_y + self.var_map[var_name]
         return num_to_fish(y_coord)
+
+    def _build_string_push(self, text: str) -> str:
+        """Generates fish code to push characters of `text` onto stack in order (text[0] first, text[-1] last)."""
+        fish_str = ""
+        in_quote = False
+        for ch in text:
+            code = ord(ch)
+            if 32 <= code <= 126 and ch != '"':
+                if not in_quote:
+                    fish_str += '"'
+                    in_quote = True
+                fish_str += ch
+            else:
+                if in_quote:
+                    fish_str += '"'
+                    in_quote = False
+                
+                if code == 10:    # \n -> hex 'a'
+                    fish_str += "a"
+                elif code == 13:  # \r -> hex 'd'
+                    fish_str += "d"
+                elif code == 9:   # \t -> '9'
+                    fish_str += "9"
+                else:
+                    fish_str += num_to_fish(code)
+        if in_quote:
+            fish_str += '"'
+        return fish_str
 
     def _eval_operand(self, operand) -> str:
         """Generates fish code that evaluates an operand/expression and leaves its value on top of stack."""
@@ -427,6 +458,18 @@ class FishTranspiler:
                     val_code = self._eval_operand(elem)
                     x_code = num_to_fish(idx)
                     line_code += f"{val_code}{x_code}{y_code}p"
+            elif isinstance(node.rhs, StringNode):
+                y_code = self._get_var_y(node.target.name)
+                text = node.rhs.text
+                line_code += self._build_string_push(text)
+                # Pop and store from right-to-left so top of stack matches the current index
+                for idx in range(len(text) - 1, -1, -1):
+                    if node.target.index is None:
+                        x_code = num_to_fish(idx)
+                    else:
+                        base_x = self._eval_operand(node.target.index)
+                        x_code = f"{base_x}{num_to_fish(idx)}+" if idx > 0 else base_x
+                    line_code += f"{x_code}{y_code}p"
             else:
                 addr = self._get_addr_code(node.target)
                 if node.op == '=':
@@ -456,33 +499,7 @@ class FishTranspiler:
                 full_text = text + ('\n' if is_println else '')
                 reversed_text = full_text[::-1]
                 
-                fish_str = ""
-                in_quote = False
-                
-                for ch in reversed_text:
-                    code = ord(ch)
-                    if 32 <= code <= 126 and ch != '"':
-                        if not in_quote:
-                            fish_str += '"'
-                            in_quote = True
-                        fish_str += ch
-                    else:
-                        if in_quote:
-                            fish_str += '"'
-                            in_quote = False
-                        
-                        if code == 10:    # \n -> hex 'a'
-                            fish_str += "a"
-                        elif code == 13:  # \r -> hex 'd'
-                            fish_str += "d"
-                        elif code == 9:   # \t -> '9'
-                            fish_str += "9"
-                        else:
-                            fish_str += num_to_fish(code)
-
-                if in_quote:
-                    fish_str += '"'
-
+                fish_str = self._build_string_push(reversed_text)
                 outputs = "o" * len(full_text)
                 line_code = f">{fish_str}{outputs}"
             else:
