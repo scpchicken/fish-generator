@@ -4,6 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Fish Transpiler</title>
+  <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16x16.png">
+  <link rel="shortcut icon" type="image/x-icon" href="icons/favicon.ico">
+  <link rel="manifest" href="icons/site.webmanifest">
   <!-- Pyodide CDN -->
   <script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
   <style>
@@ -195,6 +200,42 @@
       background-color: #b91c1c;
     }
 
+    /* Loading Overlay & Blur */
+    .overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(15, 23, 42, 0.5); /* Optional: Lowered opacity from 0.75 to 0.5 */
+      backdrop-filter: blur(2px);        /* Reduced from 5px to 2px */
+      -webkit-backdrop-filter: blur(2px);/* Reduced from 5px to 2px */
+      display: none;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 9999;
+      color: #f8fafc;
+    }
+    .spinner {
+      width: 50px;
+      height: 50px;
+      border: 5px solid #334155;
+      border-top: 5px solid #3b82f6;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-bottom: 16px;
+    }
+    .overlay-text {
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
     /* Footer */
     footer {
       margin-top: 40px;
@@ -215,6 +256,12 @@
   </style>
 </head>
 <body>
+
+  <!-- Loading Overlay -->
+  <div id="loadingOverlay" class="overlay">
+    <div class="spinner"></div>
+    <div id="overlayText" class="overlay-text">Running code...</div>
+  </div>
 
   <h1>Fish Transpiler Online</h1>
   <div id="status">Loading Python runtime (Pyodide)...</div>
@@ -269,12 +316,25 @@
   <script>
     let pyodide;
 
+    function showLoading(text = "Running...") {
+      const overlay = document.getElementById("loadingOverlay");
+      document.getElementById("overlayText").innerText = text;
+      overlay.style.display = "flex";
+    }
+
+    function hideLoading() {
+      document.getElementById("loadingOverlay").style.display = "none";
+    }
+
     async function initPyodide() {
       const statusEl = document.getElementById("status");
       const transpileBtn = document.getElementById("transpileBtn");
       const runBtn = document.getElementById("runBtn");
 
       try {
+        showLoading("Loading Python Runtime (Pyodide)...");
+        await new Promise(r => setTimeout(r, 50));
+
         // Initialize Pyodide WASM environment
         pyodide = await loadPyodide({
           indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/"
@@ -317,6 +377,8 @@ FishTranspiler = mod_globals['FishTranspiler']
         statusEl.innerText = "Initialization Failed: " + err.message;
         statusEl.style.color = "#ef4444";
         console.error(err);
+      } finally {
+        hideLoading();
       }
     }
 
@@ -368,7 +430,6 @@ FishTranspiler = mod_globals['FishTranspiler']
           const owner = hostname.split('.')[0];
           const repo = pathParts[0];
 
-          // Set dynamic repository footer link
           githubLink.href = `https://github.com/${owner}/${repo}`;
 
           async function fetchTree(dirPath) {
@@ -407,7 +468,6 @@ FishTranspiler = mod_globals['FishTranspiler']
         select.appendChild(option);
       });
 
-      // Ensure default selection is test/tutorial/tutorial.c
       if (exampleFiles.includes("test/tutorial/tutorial.c")) {
         select.value = "test/tutorial/tutorial.c";
       }
@@ -421,7 +481,7 @@ FishTranspiler = mod_globals['FishTranspiler']
         const cRes = await fetch(cFilePath);
         if (cRes.ok) {
           inputEl.value = await cRes.text();
-          runTranspiler();
+          await runTranspiler();
         } else {
           inputEl.value = `// Failed to load ${cFilePath}`;
         }
@@ -433,7 +493,6 @@ FishTranspiler = mod_globals['FishTranspiler']
 
         if (iRes.ok) {
           const iText = await iRes.text();
-          // Parse .i content split by double newlines (\n\n)
           const rawArgs = iText.replace(/\r\n/g, "\n").split("\n\n");
           const parsedArgs = rawArgs.map(arg => arg.trim()).filter(arg => arg !== "");
           
@@ -451,8 +510,11 @@ FishTranspiler = mod_globals['FishTranspiler']
 
     /* --- TRANSPILER & RUNNER EXECUTION --- */
 
-    function runTranspiler() {
+    async function runTranspiler() {
       if (!pyodide) return;
+
+      showLoading("Transpiling Code...");
+      await new Promise(r => setTimeout(r, 50));
 
       const sourceCode = document.getElementById("inputCode").value;
       const outputEl = document.getElementById("outputCode");
@@ -468,76 +530,111 @@ transpiled_output = transpiler.transpile(user_source_code)
         outputEl.value = pyodide.globals.get("transpiled_output");
       } catch (err) {
         outputEl.value = "Transpilation Error:\n" + err.message;
+      } finally {
+        hideLoading();
       }
     }
 
-    function runFishCode() {
+    async function runFishCode() {
       if (!pyodide) return;
-    
-      // Re-transpile before running
-      runTranspiler();
-    
-      const transpiledCode = document.getElementById("outputCode").value;
+
+      showLoading("Executing Fish Interpreter...");
+      await new Promise(r => setTimeout(r, 50));
+
+      // Re-transpile first
+      const sourceCode = document.getElementById("inputCode").value;
+      const outputEl = document.getElementById("outputCode");
+
+      try {
+        pyodide.globals.set("user_source_code", sourceCode);
+        pyodide.runPython(`
+transpiler = FishTranspiler()
+transpiled_output = transpiler.transpile(user_source_code)
+        `);
+        outputEl.value = pyodide.globals.get("transpiled_output");
+      } catch (err) {
+        outputEl.value = "Transpilation Error:\n" + err.message;
+        hideLoading();
+        return;
+      }
+
+      const transpiledCode = outputEl.value;
       const args = getArguments();
-      const outputEl = document.getElementById("executionOutput");
-    
-      outputEl.value = "Running...";
-    
+      const execOutputEl = document.getElementById("executionOutput");
+
+      execOutputEl.value = "Running...";
+
       try {
         pyodide.globals.set("user_fish_code", transpiledCode);
         pyodide.globals.set("user_args", args);
-    
+
         pyodide.runPython(`
-    import sys
-    import io
-    import types
-    
-    # 1. Mock missing terminal modules (termios & tty) for browser/Pyodide
-    if 'termios' not in sys.modules:
-        termios_mock = types.ModuleType('termios')
-        termios_mock.TCSADRAIN = 0
-        termios_mock.tcgetattr = lambda fd: [0, 0, 0, 0, 0, 0, []]
-        termios_mock.tcsetattr = lambda fd, opt, settings: None
-        sys.modules['termios'] = termios_mock
-    
-    if 'tty' not in sys.modules:
-        tty_mock = types.ModuleType('tty')
-        tty_mock.setraw = lambda fd: None
-        tty_mock.setcbreak = lambda fd: None
-        sys.modules['tty'] = tty_mock
-    
-    # 2. Capture stdout and stderr
-    old_stdout, old_stderr = sys.stdout, sys.stderr
-    sys.stdout = stdout_buf = io.StringIO()
-    sys.stderr = stderr_buf = io.StringIO()
-    
-    # 3. Write code.z to virtual filesystem
-    with open("code.z", "w", encoding="utf-8") as f:
-        f.write(user_fish_code)
-    
-    # 4. Construct CLI arguments: python3 fish.py code.z -- "arg1" "arg2"
-    sys.argv = ["fish.py", "code.z"]
-    if user_args:
-        sys.argv.append("--")
-        sys.argv.extend(user_args)
-    
-    try:
-        fish_globals = {'__name__': '__main__'}
-        exec(fish_source_code, fish_globals)
-    except SystemExit:
-        pass  # Handle CLI sys.exit cleanly
-    except Exception as ex:
-        print(f"Runtime Exception: {ex}", file=sys.stderr)
-    finally:
-        sys.stdout = old_stdout
-        sys.stderr = old_stderr
-    
-    run_result = stdout_buf.getvalue() + stderr_buf.getvalue()
+import sys
+import io
+import time
+import types
+
+# 1. Mock missing terminal modules (termios & tty) for browser/Pyodide
+if 'termios' not in sys.modules:
+    termios_mock = types.ModuleType('termios')
+    termios_mock.TCSADRAIN = 0
+    termios_mock.tcgetattr = lambda fd: [0, 0, 0, 0, 0, 0, []]
+    termios_mock.tcsetattr = lambda fd, opt, settings: None
+    sys.modules['termios'] = termios_mock
+
+if 'tty' not in sys.modules:
+    tty_mock = types.ModuleType('tty')
+    tty_mock.setraw = lambda fd: None
+    tty_mock.setcbreak = lambda fd: None
+    sys.modules['tty'] = tty_mock
+
+# 2. Capture stdout and stderr
+old_stdout, old_stderr = sys.stdout, sys.stderr
+sys.stdout = stdout_buf = io.StringIO()
+sys.stderr = stderr_buf = io.StringIO()
+
+# 3. Write code.z to virtual filesystem
+with open("code.z", "w", encoding="utf-8") as f:
+    f.write(user_fish_code)
+
+# 4. Construct CLI arguments: python3 fish.py code.z -- "arg1" "arg2"
+sys.argv = ["fish.py", "code.z"]
+if user_args:
+    sys.argv.append("--")
+    sys.argv.extend(user_args)
+
+# 5. Set 5-second execution timeout using sys.settrace
+start_time = time.time()
+
+def timeout_trace(frame, event, arg):
+    if time.time() - start_time > 5.0:
+        raise TimeoutError("Execution timed out! Exceeded 5 seconds limit.")
+    return timeout_trace
+
+sys.settrace(timeout_trace)
+
+try:
+    fish_globals = {'__name__': '__main__'}
+    exec(fish_source_code, fish_globals)
+except SystemExit:
+    pass  # Allow normal exit
+except TimeoutError as te:
+    print(f"\\n[Error] {te}", file=sys.stderr)
+except Exception as ex:
+    print(f"Runtime Exception: {ex}", file=sys.stderr)
+finally:
+    sys.settrace(None)  # Remove tracer
+    sys.stdout = old_stdout
+    sys.stderr = old_stderr
+
+run_result = stdout_buf.getvalue() + stderr_buf.getvalue()
         `);
-    
-        outputEl.value = pyodide.globals.get("run_result") || "(No output produced)";
+
+        execOutputEl.value = pyodide.globals.get("run_result") || "(No output produced)";
       } catch (err) {
-        outputEl.value = "Execution Error:\n" + err.message;
+        execOutputEl.value = "Execution Error:\n" + err.message;
+      } finally {
+        hideLoading();
       }
     }
 

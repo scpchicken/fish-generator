@@ -14,9 +14,8 @@ while i < 101 {
     }
 
     if g {
-        println(i)
-    } else {
-        println("")
+        print(i)
     }
+    println("")
     i += 1
 }
