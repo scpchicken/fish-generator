@@ -117,7 +117,7 @@ class WhileNode(ASTNode):
 
 def tokenize(code: str):
     token_specification = [
-        ('COMMENT',  r'//.*|/\*[\s\S]*?\*/'),
+        ('COMMENT',  r'#.*'),
         ('WHILE',    r'\bwhile\b'),
         ('IF',       r'\bif\b'),
         ('ELSE',     r'\belse\b'),
