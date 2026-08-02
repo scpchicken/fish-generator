@@ -29,7 +29,7 @@ class VarRef:
     """Represents variable access: simple `a` or indexed `a[expr]`."""
     def __init__(self, name: str, index=None):
         self.name = name
-        self.index = index  # None (defaults to x=0) or an operand node
+        self.index = index  # None (defaults to x=0) or an expression node
 
 
 class IntNode:
@@ -62,9 +62,17 @@ class GetcNode:
     pass
 
 
+class BinaryOpNode:
+    """Represents binary operations like `a < b` or `a > b`."""
+    def __init__(self, left, op: str, right):
+        self.left = left
+        self.op = op
+        self.right = right
+
+
 class ArrayLiteralNode:
     def __init__(self, elements: list):
-        self.elements = elements  # List of operands
+        self.elements = elements  # List of operands/expressions
 
 
 class ASTNode:
@@ -84,7 +92,7 @@ class AssignNode(ASTNode):
 
 class PrintNode(ASTNode):
     def __init__(self, operand, mode='println'):
-        self.operand = operand  # Can be an operand node or a StringNode
+        self.operand = operand  # Can be an operand/expression node or StringNode
         self.mode = mode        # 'println', 'print', or 'putc'
 
     def line_count(self) -> int:
@@ -117,7 +125,7 @@ class WhileNode(ASTNode):
 
 def tokenize(code: str):
     token_specification = [
-        ('COMMENT',  r'#.*'),
+        ('COMMENT',  r'#.*|//.*|/\*[\s\S]*?\*/'),
         ('WHILE',    r'\bwhile\b'),
         ('IF',       r'\bif\b'),
         ('ELSE',     r'\belse\b'),
@@ -133,6 +141,7 @@ def tokenize(code: str):
         ('LPAREN',   r'\('),
         ('RPAREN',   r'\)'),
         ('OP',       r'\+=|-=|\*=|//=|\/=|%=|='),
+        ('COMP',     r'<|>'),
         ('STRING',   r'"(?:\\.|[^"\\])*"'),
         ('CHAR',     r"'(?:\\.|[^'\\])'"),
         ('INT',      r'-?\d+'),
@@ -193,7 +202,7 @@ class Parser:
 
         if kind == 'WHILE':
             self.expect('WHILE')
-            cond = self.parse_operand()
+            cond = self.parse_expression()
             self.expect('LBRACE')
             body = self.parse_program()
             self.expect('RBRACE')
@@ -201,7 +210,7 @@ class Parser:
 
         elif kind == 'IF':
             self.expect('IF')
-            cond = self.parse_operand()
+            cond = self.parse_expression()
             self.expect('LBRACE')
             true_body = self.parse_program()
             self.expect('RBRACE')
@@ -228,7 +237,7 @@ class Parser:
                 self.expect('STRING')
                 operand = StringNode(token_val)
             else:
-                operand = self.parse_operand()
+                operand = self.parse_expression()
             self.expect('RPAREN')
             self.match('SEMI')
             mode_map = {'PRINTLN': 'println', 'PRINT': 'print', 'PUTC': 'putc'}
@@ -248,7 +257,7 @@ class Parser:
         _, var_name = self.expect('IDENT')
         index = None
         if self.match('LBRACK'):
-            index = self.parse_operand()
+            index = self.parse_expression()
             self.expect('RBRACK')
         return VarRef(var_name, index)
 
@@ -272,19 +281,27 @@ class Parser:
         else:
             raise SyntaxError(f"Expected operand (INT, CHAR, GETC, or IDENT), got {k} ({val})")
 
+    def parse_expression(self):
+        left = self.parse_operand()
+        if self.peek()[0] == 'COMP':
+            _, op = self.expect('COMP')
+            right = self.parse_operand()
+            return BinaryOpNode(left, op, right)
+        return left
+
     def parse_rhs(self):
         if self.match('LBRACK'):
             elements = []
             if self.peek()[0] != 'RBRACK':
                 while True:
-                    elements.append(self.parse_operand())
+                    elements.append(self.parse_expression())
                     if self.match('COMMA'):
                         continue
                     break
             self.expect('RBRACK')
             return ArrayLiteralNode(elements)
         else:
-            return self.parse_operand()
+            return self.parse_expression()
 
 
 # --- TRANSPILER ---
@@ -302,7 +319,7 @@ class FishTranspiler:
         return num_to_fish(y_coord)
 
     def _eval_operand(self, operand) -> str:
-        """Generates fish code that evaluates an operand and leaves its value on top of stack."""
+        """Generates fish code that evaluates an operand/expression and leaves its value on top of stack."""
         if isinstance(operand, IntNode) or isinstance(operand, CharNode):
             return num_to_fish(operand.val)
         elif isinstance(operand, GetcNode):
@@ -310,6 +327,11 @@ class FishTranspiler:
         elif isinstance(operand, VarRef):
             addr_code = self._get_addr_code(operand)
             return f"{addr_code}g"
+        elif isinstance(operand, BinaryOpNode):
+            left_code = self._eval_operand(operand.left)
+            right_code = self._eval_operand(operand.right)
+            fish_op = "(" if operand.op == '<' else ")"
+            return f"{left_code}{right_code}{fish_op}"
         else:
             raise ValueError(f"Unknown or invalid operand type: {type(operand)}")
 

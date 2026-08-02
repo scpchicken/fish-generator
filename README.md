@@ -1,7 +1,10 @@
 # fish-generator
 hexagony generator but for fish
 
-[Inspiration](https://github.com/btnlq/HexagonyGenerator)
+#### [Inspiration](https://github.com/btnlq/HexagonyGenerator)
+
+#### Site Link: https://scpchicken.github.io/fish-generator/<br>
+
 
 ### how to run
 
@@ -46,6 +49,16 @@ if i {
 } else {
     i += 5
     println(i)
+}
+
+# comparison operators
+i = 5
+j = 3
+k = i > j
+if k {
+    println("i bigger than j")
+} else {
+    println("i smaller than j")
 }
 
 
