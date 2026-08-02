@@ -5,7 +5,7 @@ while i < 10 {
     i += 1
 }
 c = getc()
-while c - 1 {
+while c + 1 {
     while c {
         putc(c)
         c = getc()

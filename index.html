@@ -71,7 +71,7 @@
     }
     textarea {
       width: 100%;
-      height: 420px;
+      height: 380px;
       font-family: 'Fira Code', 'Consolas', monospace;
       font-size: 14px;
       line-height: 1.5;
@@ -129,6 +129,23 @@
       border-color: transparent;
     }
 
+    /* Action Buttons Bar */
+    .actions-bar {
+      display: flex;
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    /* Output Section */
+    .output-section {
+      margin-top: 20px;
+    }
+    .output-section textarea {
+      height: 160px;
+      background-color: #020617;
+      color: #38bdf8;
+    }
+
     /* Buttons */
     button {
       padding: 8px 16px;
@@ -140,7 +157,6 @@
       transition: background-color 0.2s ease;
     }
     .btn-primary {
-      margin-top: 15px;
       padding: 10px 20px;
       font-size: 16px;
       background-color: #2563eb;
@@ -149,9 +165,18 @@
     .btn-primary:hover:not(:disabled) {
       background-color: #1d4ed8;
     }
-    .btn-primary:disabled {
-      background-color: #334155;
-      color: #64748b;
+    .btn-run {
+      padding: 10px 20px;
+      font-size: 16px;
+      background-color: #10b981;
+      color: white;
+    }
+    .btn-run:hover:not(:disabled) {
+      background-color: #059669;
+    }
+    button:disabled {
+      background-color: #334155 !important;
+      color: #64748b !important;
       cursor: not-allowed;
     }
     .btn-add {
@@ -168,6 +193,24 @@
     }
     .btn-remove:hover {
       background-color: #b91c1c;
+    }
+
+    /* Footer */
+    footer {
+      margin-top: 40px;
+      padding: 20px 0;
+      text-align: center;
+      border-top: 1px solid #334155;
+      color: #94a3b8;
+      font-size: 14px;
+    }
+    footer a {
+      color: #3b82f6;
+      text-decoration: none;
+      font-weight: bold;
+    }
+    footer a:hover {
+      text-decoration: underline;
     }
   </style>
 </head>
@@ -206,14 +249,30 @@
     <div id="argsContainer" class="args-list"></div>
   </div>
 
-  <button id="transpileBtn" class="btn-primary" disabled onclick="runTranspiler()">Transpile</button>
+  <!-- Action Buttons -->
+  <div class="actions-bar">
+    <button id="transpileBtn" class="btn-primary" disabled onclick="runTranspiler()">Transpile</button>
+    <button id="runBtn" class="btn-run" disabled onclick="runFishCode()">▶ Run Code</button>
+  </div>
+
+  <!-- Execution Output -->
+  <div class="output-section">
+    <label for="executionOutput">Execution Output:</label>
+    <textarea id="executionOutput" readonly placeholder="Interpreter output will appear here after clicking 'Run Code'..."></textarea>
+  </div>
+
+  <!-- Footer -->
+  <footer>
+    View source on <a id="githubLink" href="https://github.com" target="_blank" rel="noopener noreferrer">GitHub</a>
+  </footer>
 
   <script>
     let pyodide;
 
     async function initPyodide() {
       const statusEl = document.getElementById("status");
-      const btnEl = document.getElementById("transpileBtn");
+      const transpileBtn = document.getElementById("transpileBtn");
+      const runBtn = document.getElementById("runBtn");
 
       try {
         // Initialize Pyodide WASM environment
@@ -221,17 +280,24 @@
           indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/"
         });
 
-        // Fetch fishgen.py from root repository folder
-        const response = await fetch('fishgen.py');
-        if (!response.ok) {
+        // 1. Fetch fishgen.py from root repository folder
+        const fgResponse = await fetch('fishgen.py');
+        if (!fgResponse.ok) {
           throw new Error("Could not find fishgen.py in repository.");
         }
-        const fishgenSource = await response.text();
-
-        // Pass script source into Pyodide globals
+        const fishgenSource = await fgResponse.text();
         pyodide.globals.set("fishgen_source_code", fishgenSource);
 
-        // Execute script with __name__ set to 'fishgen' so CLI sys.exit(1) is skipped
+        // 2. Fetch fish.py from root repository folder
+        const fishResponse = await fetch('fish.py');
+        if (!fishResponse.ok) {
+          console.warn("Could not find fish.py in repository. 'Run Code' may fail.");
+        } else {
+          const fishSource = await fishResponse.text();
+          pyodide.globals.set("fish_source_code", fishSource);
+        }
+
+        // Execute fishgen script in Pyodide
         pyodide.runPython(`
 mod_globals = {'__name__': 'fishgen'}
 exec(fishgen_source_code, mod_globals)
@@ -240,7 +306,8 @@ FishTranspiler = mod_globals['FishTranspiler']
 
         statusEl.innerText = "Pyodide Ready!";
         statusEl.style.color = "#22c55e";
-        btnEl.disabled = false;
+        transpileBtn.disabled = false;
+        runBtn.disabled = false;
 
         // Load example list and set default example
         await discoverExamples();
@@ -261,7 +328,6 @@ FishTranspiler = mod_globals['FishTranspiler']
       const row = document.createElement("div");
       row.className = "arg-row";
 
-      // Changed from <input> to <textarea> to allow literal multiline inputs
       const textarea = document.createElement("textarea");
       textarea.className = "arg-input";
       textarea.value = value;
@@ -282,10 +348,16 @@ FishTranspiler = mod_globals['FishTranspiler']
       document.getElementById("argsContainer").innerHTML = "";
     }
 
+    function getArguments() {
+      const inputs = document.querySelectorAll(".arg-input");
+      return Array.from(inputs).map(input => input.value);
+    }
+
     /* --- EXAMPLE & FILE LOADING --- */
 
     async function discoverExamples() {
       const select = document.getElementById("exampleSelect");
+      const githubLink = document.getElementById("githubLink");
       let exampleFiles = ["test/tutorial/tutorial.c"];
 
       try {
@@ -295,6 +367,9 @@ FishTranspiler = mod_globals['FishTranspiler']
         if (hostname.endsWith(".github.io") && pathParts.length > 0) {
           const owner = hostname.split('.')[0];
           const repo = pathParts[0];
+
+          // Set dynamic repository footer link
+          githubLink.href = `https://github.com/${owner}/${repo}`;
 
           async function fetchTree(dirPath) {
             const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${dirPath}`;
@@ -374,7 +449,7 @@ FishTranspiler = mod_globals['FishTranspiler']
       loadExample(selectedPath);
     }
 
-    /* --- TRANSPILER EXECUTION --- */
+    /* --- TRANSPILER & RUNNER EXECUTION --- */
 
     function runTranspiler() {
       if (!pyodide) return;
@@ -393,6 +468,76 @@ transpiled_output = transpiler.transpile(user_source_code)
         outputEl.value = pyodide.globals.get("transpiled_output");
       } catch (err) {
         outputEl.value = "Transpilation Error:\n" + err.message;
+      }
+    }
+
+    function runFishCode() {
+      if (!pyodide) return;
+    
+      // Re-transpile before running
+      runTranspiler();
+    
+      const transpiledCode = document.getElementById("outputCode").value;
+      const args = getArguments();
+      const outputEl = document.getElementById("executionOutput");
+    
+      outputEl.value = "Running...";
+    
+      try {
+        pyodide.globals.set("user_fish_code", transpiledCode);
+        pyodide.globals.set("user_args", args);
+    
+        pyodide.runPython(`
+    import sys
+    import io
+    import types
+    
+    # 1. Mock missing terminal modules (termios & tty) for browser/Pyodide
+    if 'termios' not in sys.modules:
+        termios_mock = types.ModuleType('termios')
+        termios_mock.TCSADRAIN = 0
+        termios_mock.tcgetattr = lambda fd: [0, 0, 0, 0, 0, 0, []]
+        termios_mock.tcsetattr = lambda fd, opt, settings: None
+        sys.modules['termios'] = termios_mock
+    
+    if 'tty' not in sys.modules:
+        tty_mock = types.ModuleType('tty')
+        tty_mock.setraw = lambda fd: None
+        tty_mock.setcbreak = lambda fd: None
+        sys.modules['tty'] = tty_mock
+    
+    # 2. Capture stdout and stderr
+    old_stdout, old_stderr = sys.stdout, sys.stderr
+    sys.stdout = stdout_buf = io.StringIO()
+    sys.stderr = stderr_buf = io.StringIO()
+    
+    # 3. Write code.z to virtual filesystem
+    with open("code.z", "w", encoding="utf-8") as f:
+        f.write(user_fish_code)
+    
+    # 4. Construct CLI arguments: python3 fish.py code.z -- "arg1" "arg2"
+    sys.argv = ["fish.py", "code.z"]
+    if user_args:
+        sys.argv.append("--")
+        sys.argv.extend(user_args)
+    
+    try:
+        fish_globals = {'__name__': '__main__'}
+        exec(fish_source_code, fish_globals)
+    except SystemExit:
+        pass  # Handle CLI sys.exit cleanly
+    except Exception as ex:
+        print(f"Runtime Exception: {ex}", file=sys.stderr)
+    finally:
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
+    
+    run_result = stdout_buf.getvalue() + stderr_buf.getvalue()
+        `);
+    
+        outputEl.value = pyodide.globals.get("run_result") || "(No output produced)";
+      } catch (err) {
+        outputEl.value = "Execution Error:\n" + err.message;
       }
     }
 
