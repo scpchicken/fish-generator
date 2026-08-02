@@ -1,10 +1,9 @@
 # fish-generator
-hexagony generator but for fish
+hexagony generator but for fish, write your code in fishc
 
 #### [Inspiration](https://github.com/btnlq/HexagonyGenerator)
 
 #### Site Link: https://scpchicken.github.io/fish-generator/<br>
-
 
 ### how to run
 
@@ -14,7 +13,7 @@ python3 fish.py hello.z
 python3 fish.py hello.z -- "first" "second"
 ```
 
-### docs
+### fishc docs
 
 ```bash
 # set variables

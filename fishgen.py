@@ -13,6 +13,8 @@ def _init_num_fish():
     pq = []
 
     def add(val, code):
+        if val < -500 or val > 2000:
+            return
         if val not in dist or len(code) < len(dist[val]):
             dist[val] = code
             heapq.heappush(pq, (len(code), val, code))
@@ -27,16 +29,21 @@ def _init_num_fish():
         if ch != "'":
             add(c, f"'{ch}'")
 
-    # BFS search up to depth 5
+    # Fast single-byte control chars
+    add(10, "a")  # '\n'
+    add(13, "d")  # '\r'
+    add(9, "9")   # '\t'
+
+    # BFS search up to depth 6 for shortest representations
     while pq:
         l, v, code = heapq.heappop(pq)
-        if len(dist[v]) < l:
-            continue
-        if l >= 5:
+        if len(dist[v]) < l or l >= 6:
             continue
 
         # Unary operations
         add(-v, f"0{code}-")
+        add(v + 1, f"{code}1+")
+        add(v - 1, f"{code}1-")
         add(v * 2, f"{code}:+")
         add(v * v, f"{code}:*")
 
@@ -49,6 +56,8 @@ def _init_num_fish():
             add(v * v2, f"{code}{code2}*")
             if v2 != 0 and v % v2 == 0:
                 add(v // v2, f"{code}{code2},")
+            if v2 != 0:
+                add(v % v2, f"{code}{code2}%")
 
     _NUM_FISH_CACHE = dist
 
@@ -124,6 +133,15 @@ class ASTNode:
         raise NotImplementedError()
 
 
+def should_use_loop(rhs) -> bool:
+    """Determines whether using a loop construct is shorter than unrolling element positions."""
+    if isinstance(rhs, StringNode):
+        return len(rhs.text) >= 5
+    elif isinstance(rhs, ArrayLiteralNode):
+        return len(rhs.elements) >= 5
+    return False
+
+
 class AssignNode(ASTNode):
     def __init__(self, target: VarRef, op: str, rhs):
         self.target = target
@@ -131,6 +149,8 @@ class AssignNode(ASTNode):
         self.rhs = rhs
 
     def line_count(self) -> int:
+        if should_use_loop(self.rhs):
+            return 2
         return 1
 
 
@@ -408,25 +428,126 @@ FISH_OPS = {
 
 class FishTranspiler:
     def __init__(self):
-        self.var_map = {}
-        self.base_y = 0
+        self.var_layouts = {}  # var_name -> (base_x, y)
+        self.var_stats = {}    # var_name -> {'scalar': count, 'indexed': count}
+
+    def _analyze_vars(self, ast_nodes):
+        """Pass 0: Collect all unique variables and count access frequencies."""
+        self.var_stats = {}
+
+        def walk(node):
+            if isinstance(node, VarRef):
+                if node.name not in self.var_stats:
+                    self.var_stats[node.name] = {'scalar': 0, 'indexed': 0}
+                if node.index is None:
+                    self.var_stats[node.name]['scalar'] += 1
+                else:
+                    self.var_stats[node.name]['indexed'] += 1
+                    walk(node.index)
+            elif isinstance(node, AssignNode):
+                walk(node.target)
+                if not isinstance(node.rhs, (ArrayLiteralNode, StringNode)):
+                    walk(node.rhs)
+            elif isinstance(node, PrintNode):
+                if not isinstance(node.operand, StringNode):
+                    walk(node.operand)
+            elif isinstance(node, BinaryOpNode):
+                walk(node.left)
+                walk(node.right)
+            elif isinstance(node, IfNode):
+                walk(node.cond)
+                for n in node.true_body:
+                    walk(n)
+                for n in node.false_body:
+                    walk(n)
+            elif isinstance(node, WhileNode):
+                walk(node.cond)
+                for n in node.body:
+                    walk(n)
+
+        for node in ast_nodes:
+            walk(node)
+
+    def _optimize_layout(self, line_lengths: list):
+        """
+        Assigns each variable to a unique line y that minimizes total character length.
+        Line y can be an existing code line (base_x = line_lengths[y]) or a new line below code (base_x = 0).
+        """
+        vars_sorted = sorted(
+            self.var_stats.keys(),
+            key=lambda v: self.var_stats[v]['scalar'] + self.var_stats[v]['indexed'],
+            reverse=True
+        )
+
+        total_lines = len(line_lengths)
+        used_lines = set()
+        self.var_layouts = {}
+
+        for var in vars_sorted:
+            stats = self.var_stats[var]
+            best_cost = float('inf')
+            best_placement = (0, 0)
+
+            max_candidate_y = total_lines + len(vars_sorted)
+            for cand_y in range(max_candidate_y):
+                if cand_y in used_lines:
+                    continue
+
+                if cand_y < total_lines:
+                    base_x = line_lengths[cand_y]
+                else:
+                    base_x = 0
+
+                x_cost = len(num_to_fish(base_x))
+                y_cost = len(num_to_fish(cand_y))
+
+                scalar_cost = stats['scalar'] * (x_cost + y_cost)
+
+                if base_x > 0:
+                    indexed_cost = stats['indexed'] * (x_cost + 1 + y_cost)
+                else:
+                    indexed_cost = stats['indexed'] * y_cost
+
+                total_var_cost = scalar_cost + indexed_cost
+
+                if total_var_cost < best_cost:
+                    best_cost = total_var_cost
+                    best_placement = (base_x, cand_y)
+
+            chosen_x, chosen_y = best_placement
+            self.var_layouts[var] = (chosen_x, chosen_y)
+            used_lines.add(chosen_y)
 
     def _get_var_y(self, var_name: str) -> str:
         """Returns the y-coordinate instruction string for `var_name`."""
-        if var_name not in self.var_map:
-            self.var_map[var_name] = len(self.var_map)
-        y_coord = self.base_y + self.var_map[var_name]
-        return num_to_fish(y_coord)
+        return num_to_fish(self.var_layouts[var_name][1])
+
+    def _get_addr_code(self, var_ref: VarRef) -> str:
+        """Generates fish code pushing x-pos then y-pos onto stack."""
+        base_x, y_coord = self.var_layouts[var_ref.name]
+        y_code = num_to_fish(y_coord)
+
+        if var_ref.index is None:
+            x_code = num_to_fish(base_x)
+        else:
+            idx_code = self._eval_operand(var_ref.index)
+            if base_x > 0:
+                x_code = f"{idx_code}{num_to_fish(base_x)}+"
+            else:
+                x_code = idx_code
+
+        return f"{x_code}{y_code}"
 
     def _build_string_push(self, text: str) -> str:
-        """Generates fish code to push characters of `text` using optimal quoting."""
+        """Generates fish code to push characters of `text` onto stack, supporting UTF-8 string literals."""
         fish_str = ""
         quote_char = "'" if ('"' in text and "'" not in text) else '"'
         in_quote = False
 
         for ch in text:
             code = ord(ch)
-            if 32 <= code <= 126 and ch != quote_char:
+            # Allow any printable unicode character (code >= 32) except the enclosing quote character
+            if ch.isprintable() and ch != quote_char and code >= 32:
                 if not in_quote:
                     fish_str += quote_char
                     in_quote = True
@@ -452,7 +573,7 @@ class FishTranspiler:
         return fish_str
 
     def _eval_operand(self, operand) -> str:
-        """Generates fish code that evaluates an operand/expression and leaves its value on top of stack."""
+        """Evaluates an operand/expression leaving its value on top of the stack."""
         if isinstance(operand, IntNode) or isinstance(operand, CharNode):
             return num_to_fish(operand.val)
         elif isinstance(operand, GetcNode):
@@ -468,55 +589,99 @@ class FishTranspiler:
         else:
             raise ValueError(f"Unknown or invalid operand type: {type(operand)}")
 
-    def _get_addr_code(self, var_ref: VarRef) -> str:
-        """Generates fish code that pushes x-pos then y-pos onto the stack."""
-        y_code = self._get_var_y(var_ref.name)
-        if var_ref.index is None:
-            x_code = "0"
-        else:
-            x_code = self._eval_operand(var_ref.index)
-        return f"{x_code}{y_code}"
-
     def transpile(self, code: str) -> str:
-        self.var_map = {}
         tokens = tokenize(code)
         parser = Parser(tokens)
         ast_nodes = parser.parse_program()
 
+        # Step 1: Analyze variable usage frequencies
+        self._analyze_vars(ast_nodes)
+
+        # Step 2: Dummy initial pass to accurately measure generated code line lengths
         total_lines = sum(node.line_count() for node in ast_nodes)
-        self.base_y = total_lines  # Variable storage starts directly after code grid
+        self.var_layouts = {v: (0, total_lines + i) for i, v in enumerate(self.var_stats.keys())}
 
-        fish_lines = []
+        dummy_lines = []
         curr_line = 0
-
         for idx, node in enumerate(ast_nodes):
             is_last = (idx == len(ast_nodes) - 1)
             nxt = None if is_last else curr_line + node.line_count()
-            lines = self._emit_node(node, curr_line, nxt)
-            fish_lines.extend(lines)
+            dummy_lines.extend(self._emit_node(node, curr_line, nxt))
+            curr_line += node.line_count()
+
+        line_lengths = [len(line) for line in dummy_lines]
+
+        # Step 3: Determine optimal (base_x, y) coordinates per variable
+        self._optimize_layout(line_lengths)
+
+        # Step 4: Final generation pass with shortest variable coordinates
+        fish_lines = []
+        curr_line = 0
+        for idx, node in enumerate(ast_nodes):
+            is_last = (idx == len(ast_nodes) - 1)
+            nxt = None if is_last else curr_line + node.line_count()
+            fish_lines.extend(self._emit_node(node, curr_line, nxt))
             curr_line += node.line_count()
 
         return "\n".join(fish_lines)
 
     def _emit_node(self, node: ASTNode, start_line: int, next_line: int) -> list:
         if isinstance(node, AssignNode):
+            if should_use_loop(node.rhs):
+                # Efficient loop storage for longer strings/arrays
+                var_name = node.target.name
+                base_x_var, y_coord = self.var_layouts[var_name]
+                y_code = num_to_fish(y_coord)
+
+                # Initialize register & with starting X position
+                if node.target.index is None:
+                    init_x_code = f"{num_to_fish(base_x_var)}&"
+                else:
+                    idx_eval = self._eval_operand(node.target.index)
+                    if base_x_var > 0:
+                        init_x_code = f"{idx_eval}{num_to_fish(base_x_var)}+&"
+                    else:
+                        init_x_code = f"{idx_eval}&"
+
+                # Push items in reverse order so element 0 is on top of stack
+                if isinstance(node.rhs, StringNode):
+                    push_code = self._build_string_push(node.rhs.text[::-1])
+                elif isinstance(node.rhs, ArrayLiteralNode):
+                    push_code = "".join(self._eval_operand(elem) for elem in reversed(node.rhs.elements))
+
+                prefix = f">{init_x_code}{push_code}"
+                
+                # Line 1 loop body moving LEFT: & -> : -> 1 -> + -> & -> y_code -> p -> ^
+                body_left = f"p{y_code[::-1]}&+1:&"
+                num_spaces = len(body_left) - 2
+
+                jump_code = f"0{num_to_fish(next_line)}." if next_line is not None else ";"
+
+                line_0 = f"{prefix}>{' ' * num_spaces}l?v{jump_code}"
+                line_1 = f"{' ' * len(prefix)}^{body_left}<"
+
+                return [line_0, line_1]
+
             line_code = ">"
             if isinstance(node.rhs, ArrayLiteralNode):
                 y_code = self._get_var_y(node.target.name)
+                base_x = self.var_layouts[node.target.name][0]
                 for idx, elem in enumerate(node.rhs.elements):
                     val_code = self._eval_operand(elem)
-                    x_code = num_to_fish(idx)
+                    x_code = num_to_fish(base_x + idx)
                     line_code += f"{val_code}{x_code}{y_code}p"
             elif isinstance(node.rhs, StringNode):
                 y_code = self._get_var_y(node.target.name)
+                base_x = self.var_layouts[node.target.name][0]
                 text = node.rhs.text
                 line_code += self._build_string_push(text)
                 for idx in range(len(text) - 1, -1, -1):
+                    offset = base_x + idx
                     if node.target.index is None:
-                        x_code = num_to_fish(idx)
+                        x_code = num_to_fish(offset)
                     else:
-                        base_x = self._eval_operand(node.target.index)
-                        x_code = f"{base_x}{num_to_fish(idx)}+" if idx > 0 else base_x
+                        base_idx = self._eval_operand(node.target.index)
+                        x_code = f"{base_idx}{num_to_fish(offset)}+" if offset > 0 else base_idx
                     line_code += f"{x_code}{y_code}p"
             else:
                 addr = self._get_addr_code(node.target)
@@ -606,7 +771,6 @@ class FishTranspiler:
             body_cnt = sum(n.line_count() for n in node.body)
 
             L_header0 = start_line
-            L_header1 = start_line + 1
             L_body = start_line + 2
             L_after = next_line
 
