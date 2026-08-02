@@ -125,7 +125,7 @@ class WhileNode(ASTNode):
 
 def tokenize(code: str):
     token_specification = [
-        ('COMMENT',  r'#.*|//.*|/\*[\s\S]*?\*/'),
+        ('COMMENT',  r'#.*|/\*[\s\S]*?\*/'),
         ('WHILE',    r'\bwhile\b'),
         ('IF',       r'\bif\b'),
         ('ELSE',     r'\belse\b'),
@@ -140,8 +140,8 @@ def tokenize(code: str):
         ('COMMA',    r','),
         ('LPAREN',   r'\('),
         ('RPAREN',   r'\)'),
+        ('COMP',     r'==|!=|<=|>=|<|>'),  # Placed BEFORE 'OP' so '==' matches before '='
         ('OP',       r'\+=|-=|\*=|//=|\/=|%=|='),
-        ('COMP',     r'==|!=|<=|>=|<|>'),
         ('MUL_OP',   r'\/\/|\*|\/|%'),
         ('ADD_OP',   r'\+|-' ),
         ('STRING',   r'"(?:\\.|[^"\\])*"'),
@@ -349,7 +349,7 @@ FISH_OPS = {
     '-': '-',
     '*': '*',
     '/': ',',
-    '//': ',',
+    '//': ',:1%-',
     '%': '%',
     '<': '(',
     '>': ')',
@@ -422,7 +422,6 @@ class FishTranspiler:
         if isinstance(node, AssignNode):
             line_code = ">"
             if isinstance(node.rhs, ArrayLiteralNode):
-                # Array literal: assign elements sequentially along row y
                 y_code = self._get_var_y(node.target.name)
                 for idx, elem in enumerate(node.rhs.elements):
                     val_code = self._eval_operand(elem)
@@ -434,7 +433,14 @@ class FishTranspiler:
                     rhs_code = self._eval_operand(node.rhs)
                     line_code += f"{rhs_code}{addr}p"
                 else:
-                    op_map = {'+=': '+', '-=': '-', '*=': '*', '/=': ',', '//=': ',', '%=': '%'}
+                    op_map = {
+                        '+=': '+', 
+                        '-=': '-', 
+                        '*=': '*', 
+                        '/=': ',', 
+                        '//=': ',:1%-', 
+                        '%=': '%'
+                    }
                     fish_op = op_map[node.op]
                     rhs_code = self._eval_operand(node.rhs)
                     line_code += f"{addr}g{rhs_code}{fish_op}{addr}p"
@@ -455,7 +461,6 @@ class FishTranspiler:
                 
                 for ch in reversed_text:
                     code = ord(ch)
-                    # Safe printable ASCII inside fish string mode (excluding double quotes & control chars)
                     if 32 <= code <= 126 and ch != '"':
                         if not in_quote:
                             fish_str += '"'
@@ -466,7 +471,6 @@ class FishTranspiler:
                             fish_str += '"'
                             in_quote = False
                         
-                        # Handle special characters cleanly without breaking grid line alignment
                         if code == 10:    # \n -> hex 'a'
                             fish_str += "a"
                         elif code == 13:  # \r -> hex 'd'
