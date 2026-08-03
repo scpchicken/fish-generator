@@ -40,6 +40,10 @@ arr = [1, 2, 3]
 arr[5] = 67
 println(arr[5]) # 67
 
+str = "abc"
+println(str[0]) # 97
+putc(str[1]) # b
+
 # print a char
 c = 'q'
 putc(c)

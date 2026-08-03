@@ -150,7 +150,7 @@ class AssignNode(ASTNode):
 
     def line_count(self) -> int:
         if should_use_loop(self.rhs):
-            return 2
+            return 3
         return 1
 
 
@@ -160,6 +160,10 @@ class PrintNode(ASTNode):
         self.mode = mode
 
     def line_count(self) -> int:
+        if isinstance(self.operand, StringNode):
+            text = self.operand.text + ('\n' if self.mode == 'println' else '')
+            if len(text) >= 15:
+                return 3
         return 1
 
 
@@ -662,16 +666,18 @@ class FishTranspiler:
 
                 prefix = f">{init_x_code}{push_code}"
                 
-                # Line 1 loop body moving LEFT: & -> : -> 1 -> + -> & -> y_code -> p -> ^
+                # Loop body moving LEFT: & -> : -> 1 -> + -> & -> y_code -> p -> ^
                 body_left = f"p{y_code[::-1]}&+1:&"
                 num_spaces = len(body_left) - 2
 
-                jump_code = f"0{num_to_fish(next_line)}." if next_line is not None else ";"
+                jump_next = f"0{num_to_fish(start_line + 1)}."
+                jump_out = f"0{num_to_fish(next_line)}." if next_line is not None else ";"
 
-                line_0 = f"{prefix}>{' ' * num_spaces}l?v{jump_code}"
-                line_1 = f"{' ' * len(prefix)}^{body_left}<"
+                line_0 = f"{prefix}{jump_next}"
+                line_1 = f">{' ' * num_spaces}l?v{jump_out}"
+                line_2 = f"^{body_left}<"
 
-                return [line_0, line_1]
+                return [line_0, line_1, line_2]
 
             line_code = ">"
             if isinstance(node.rhs, ArrayLiteralNode):
@@ -724,8 +730,24 @@ class FishTranspiler:
                 reversed_text = full_text[::-1]
                 
                 fish_str = self._build_string_push(reversed_text)
-                outputs = "o" * len(full_text)
-                line_code = f">{fish_str}{outputs}"
+
+                if len(full_text) >= 15:
+                    len_code = num_to_fish(len(full_text))
+                    prefix = f">{fish_str}{len_code}&"
+                    
+                    jump_next = f"0{num_to_fish(start_line + 1)}."
+                    jump_out = f"0{num_to_fish(next_line)}." if next_line is not None else ";"
+
+                    line_0 = f"{prefix}{jump_next}"
+                    line_1 = f"> &:?v{jump_out}"
+                    line_2 = f"^o&-1<"
+                    
+                    return [line_0, line_1, line_2]
+                else:
+                    outputs = "o" * len(full_text)
+                    line_code = f">{fish_str}{outputs}"
+                    line_code += f"0{num_to_fish(next_line)}." if next_line is not None else ";"
+                    return [line_code]
             else:
                 val_code = self._eval_operand(node.operand)
                 if node.mode == 'println':
@@ -736,9 +758,8 @@ class FishTranspiler:
                     out_code = "o"
 
                 line_code = f">{val_code}{out_code}"
-
-            line_code += f"0{num_to_fish(next_line)}." if next_line is not None else ";"
-            return [line_code]
+                line_code += f"0{num_to_fish(next_line)}." if next_line is not None else ";"
+                return [line_code]
 
         elif isinstance(node, IfNode):
             lines = []
