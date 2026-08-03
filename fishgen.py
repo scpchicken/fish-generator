@@ -486,7 +486,6 @@ class FishTranspiler:
     def _optimize_layout(self, line_lengths: list):
         """
         Assigns each variable to a unique line y that minimizes total character length.
-        Line y can be an existing code line (base_x = line_lengths[y]) or a new line below code (base_x = 0).
         """
         vars_sorted = sorted(
             self.var_stats.keys(),
@@ -561,7 +560,6 @@ class FishTranspiler:
 
         for ch in text:
             code = ord(ch)
-            # Allow any printable unicode character (code >= 32) except the enclosing quote character
             if ch.isprintable() and ch != quote_char and code >= 32:
                 if not in_quote:
                     fish_str += quote_char
@@ -604,6 +602,35 @@ class FishTranspiler:
         else:
             raise ValueError(f"Unknown or invalid operand type: {type(operand)}")
 
+    def _generate_branch_lines(self, cond_code: str, target_L_true, target_L_false) -> tuple:
+        """
+        Dynamically generates the branching layout both with and without the leading '0' 
+        optimization, and mathematically returns the strictly shorter permutation.
+        """
+        str_t = lambda t: f"{num_to_fish(t)}." if t is not None else ";"
+        jt = str_t(target_L_true)
+        jf = str_t(target_L_false)
+
+        def gen_variant(use_zero):
+            v_pos = len(cond_code) + (3 if use_zero else 2)
+            jf_str = jf if use_zero or jf == ";" else f"0{jf}"
+            l0 = f">{'0' if use_zero else ''}{cond_code}?v{jf_str}"
+            
+            left = (">.!" + jt[:-1][::-1] if jt.endswith('.') else jt[::-1]) + ("" if use_zero else "0")
+            
+            if v_pos >= len(left):
+                l1 = " " * (v_pos - len(left)) + f"{left}<"
+            else:
+                jt_right = jt if use_zero or jt == ";" else f"0{jt}"
+                l1 = " " * v_pos + f">{jt_right}"
+                
+            return l0, l1, len(l0) + len(l1)
+
+        l0_v1, l1_v1, len_1 = gen_variant(False)
+        l0_v2, l1_v2, len_2 = gen_variant(True)
+
+        return (l0_v2, l1_v2) if len_2 < len_1 else (l0_v1, l1_v1)
+
     def transpile(self, code: str) -> str:
         tokens = tokenize(code)
         parser = Parser(tokens)
@@ -643,12 +670,10 @@ class FishTranspiler:
     def _emit_node(self, node: ASTNode, start_line: int, next_line: int) -> list:
         if isinstance(node, AssignNode):
             if should_use_loop(node.rhs):
-                # Efficient loop storage for longer strings/arrays
                 var_name = node.target.name
                 base_x_var, y_coord = self.var_layouts[var_name]
                 y_code = num_to_fish(y_coord)
 
-                # Initialize register & with starting X position
                 if node.target.index is None:
                     init_x_code = f"{num_to_fish(base_x_var)}&"
                 else:
@@ -658,7 +683,6 @@ class FishTranspiler:
                     else:
                         init_x_code = f"{idx_eval}&"
 
-                # Push items in reverse order so element 0 is on top of stack
                 if isinstance(node.rhs, StringNode):
                     push_code = self._build_string_push(node.rhs.text[::-1])
                 elif isinstance(node.rhs, ArrayLiteralNode):
@@ -666,7 +690,6 @@ class FishTranspiler:
 
                 prefix = f">{init_x_code}{push_code}"
                 
-                # Loop body moving LEFT: & -> : -> 1 -> + -> & -> y_code -> p -> ^
                 body_left = f"p{y_code[::-1]}&+1:&"
                 num_spaces = len(body_left) - 2
 
@@ -771,24 +794,12 @@ class FishTranspiler:
             L_after = next_line
 
             cond_code = self._eval_operand(node.cond)
+            
             target_L_false = L_false if false_cnt > 0 else L_after
-            jump_false = f"0{num_to_fish(target_L_false)}." if target_L_false is not None else ";"
-            line_0 = f">{cond_code}?v{jump_false}"
-            lines.append(line_0)
-
             target_L_true = L_true if true_cnt > 0 else L_after
-            jump_true = f"0{num_to_fish(target_L_true)}." if target_L_true is not None else ";"
-            v_pos = 1 + len(cond_code) + 1
 
-            if jump_true.endswith('.'):
-                left_payload = ">.!" + jump_true[:-1][::-1]
-            else:
-                left_payload = jump_true[::-1]
-
-            if v_pos >= len(left_payload):
-                line_1 = " " * (v_pos - len(left_payload)) + f"{left_payload}<"
-            else:
-                line_1 = " " * v_pos + f">{jump_true}"
+            line_0, line_1 = self._generate_branch_lines(cond_code, target_L_true, target_L_false)
+            lines.append(line_0)
             lines.append(line_1)
 
             curr = L_true
@@ -816,23 +827,11 @@ class FishTranspiler:
             L_after = next_line
 
             cond_code = self._eval_operand(node.cond)
-            jump_false = f"0{num_to_fish(L_after)}." if L_after is not None else ";"
-            line_0 = f">{cond_code}?v{jump_false}"
-            lines.append(line_0)
-
+            target_L_false = L_after
             target_L_true = L_body if body_cnt > 0 else L_header0
-            jump_true = f"0{num_to_fish(target_L_true)}."
-            v_pos = 1 + len(cond_code) + 1
 
-            if jump_true.endswith('.'):
-                left_payload = ">.!" + jump_true[:-1][::-1]
-            else:
-                left_payload = jump_true[::-1]
-
-            if v_pos >= len(left_payload):
-                line_1 = " " * (v_pos - len(left_payload)) + f"{left_payload}<"
-            else:
-                line_1 = " " * v_pos + f">{jump_true}"
+            line_0, line_1 = self._generate_branch_lines(cond_code, target_L_true, target_L_false)
+            lines.append(line_0)
             lines.append(line_1)
 
             curr = L_body
@@ -847,7 +846,7 @@ class FishTranspiler:
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python3 fishgenerator.py <input.c> [output.z]")
+        print("Usage: python3 fishgen.py <input.c> [output.z]")
         sys.exit(1)
 
     in_file = sys.argv[1]

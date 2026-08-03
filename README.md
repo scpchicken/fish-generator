@@ -35,7 +35,7 @@ print(i)
 # print with newline
 println(i)
 
-# arrays
+# arrays (only 1d supported)
 arr = [1, 2, 3]
 arr[5] = 67
 println(arr[5]) # 67
