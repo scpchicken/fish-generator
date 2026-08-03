@@ -205,6 +205,7 @@ def tokenize(code: str):
         ('LPAREN',   r'\('),
         ('RPAREN',   r'\)'),
         ('COMP',     r'==|!=|<=|>=|<|>'),
+        ('NOT',      r'!'),
         ('OP',       r'\+=|-=|\*=|//=|\/=|%=|='),
         ('MUL_OP',   r'\/\/|\*|\/|%'),
         ('ADD_OP',   r'\+|-' ),
@@ -212,7 +213,7 @@ def tokenize(code: str):
         ('CHAR',     r"'(?:\\.|[^'\\])'"),
         ('INT',      r'\d+'),
         ('IDENT',    r'[a-zA-Z_]\w*'),
-        ('SEMI',     r'[;\n]+'),
+        ('SEMI',     r'[;\n:]+'),
         ('SKIP',     r'[ \t\r]+'),
         ('MISMATCH', r'.'),
     ]
@@ -269,6 +270,8 @@ class Parser:
         if kind == 'WHILE':
             self.expect('WHILE')
             cond = self.parse_expression()
+            while self.match('SEMI'):
+                pass
             self.expect('LBRACE')
             body = self.parse_program()
             self.expect('RBRACE')
@@ -277,6 +280,8 @@ class Parser:
         elif kind == 'IF':
             self.expect('IF')
             cond = self.parse_expression()
+            while self.match('SEMI'):
+                pass
             self.expect('LBRACE')
             true_body = self.parse_program()
             self.expect('RBRACE')
@@ -287,6 +292,8 @@ class Parser:
                 pass
             if self.peek()[0] == 'ELSE':
                 self.expect('ELSE')
+                while self.match('SEMI'):
+                    pass
                 self.expect('LBRACE')
                 false_body = self.parse_program()
                 self.expect('RBRACE')
@@ -364,6 +371,10 @@ class Parser:
             if isinstance(operand, IntNode):
                 return IntNode(-operand.val)
             return BinaryOpNode(IntNode(0), '-', operand)
+        elif self.peek()[0] == 'NOT':
+            self.pos += 1
+            operand = self.parse_unary()
+            return BinaryOpNode(operand, '==', IntNode(0))
         return self.parse_primary()
 
     def parse_primary(self):
@@ -747,7 +758,16 @@ class FishTranspiler:
             target_L_true = L_true if true_cnt > 0 else L_after
             jump_true = f"0{num_to_fish(target_L_true)}." if target_L_true is not None else ";"
             v_pos = 1 + len(cond_code) + 1
-            line_1 = " " * v_pos + f">{jump_true}"
+
+            if jump_true.endswith('.'):
+                left_payload = ">.!" + jump_true[:-1][::-1]
+            else:
+                left_payload = jump_true[::-1]
+
+            if v_pos >= len(left_payload):
+                line_1 = " " * (v_pos - len(left_payload)) + f"{left_payload}<"
+            else:
+                line_1 = " " * v_pos + f">{jump_true}"
             lines.append(line_1)
 
             curr = L_true
@@ -782,7 +802,16 @@ class FishTranspiler:
             target_L_true = L_body if body_cnt > 0 else L_header0
             jump_true = f"0{num_to_fish(target_L_true)}."
             v_pos = 1 + len(cond_code) + 1
-            line_1 = " " * v_pos + f">{jump_true}"
+
+            if jump_true.endswith('.'):
+                left_payload = ">.!" + jump_true[:-1][::-1]
+            else:
+                left_payload = jump_true[::-1]
+
+            if v_pos >= len(left_payload):
+                line_1 = " " * (v_pos - len(left_payload)) + f"{left_payload}<"
+            else:
+                line_1 = " " * v_pos + f">{jump_true}"
             lines.append(line_1)
 
             curr = L_body
